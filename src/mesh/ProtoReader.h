@@ -21,6 +21,8 @@ public:
     // Validi con wireType 2.
     const uint8_t* data() const { return _data; }
     size_t dataLen() const { return _dataLen; }
+    // Valido con wireType 5 (little-endian: anche sfixed32/float via cast).
+    uint32_t fixed32() const { return _fixed32; }
 
 private:
     bool readVarint(uint64_t& out);
@@ -34,4 +36,5 @@ private:
     uint64_t _varint = 0;
     const uint8_t* _data = nullptr;
     size_t _dataLen = 0;
+    uint32_t _fixed32 = 0;
 };

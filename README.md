@@ -24,15 +24,21 @@ il **serial module in modalità `PROTO`** (client API protobuf).
 - **Input T9 multi-tap** in stile telefonico, con lettere accentate italiane
   (`à è é ì ò ù`) e tre modalità: minuscole, maiuscole, numeri.
 - **Anteprima del carattere** in grande sull'OLED 0.42" mentre si compone.
-- **UI completa** sull'OLED 128×64: modalità, byte usati, stato del
-  collegamento, testo in composizione con cursore, ultimo messaggio ricevuto
-  con il nome del mittente.
-- **Protocollo protobuf nativo** (client API di Meshtastic): handshake di
-  configurazione, heartbeat, database dei nodi e **conferme di consegna**
-  (ACK/NAK con motivo dell'errore) — cose impossibili con la semplice
-  modalità `TEXTMSG`.
-- **Zero dipendenze protobuf**: encoder/decoder minimale scritto a mano
-  (~300 righe), interamente coperto da test nativi eseguibili su PC.
+- **Messaggi diretti**: destinatario selezionabile dalla lista dei nodi
+  della mesh (broadcast di default), con nomi presi dal database nodi.
+- **Selezione canale**: lista dei canali configurati sul nodo, con i loro
+  nomi.
+- **Conferme di consegna**: ACK/NAK end-to-end con motivo dell'errore
+  (`consegnato`, `timeout`, `no route`…).
+- **Storico messaggi**: gli ultimi 8 messaggi ricevuti, con mittente e
+  vista dettaglio scorrevole; le **posizioni** ricevute vengono decodificate
+  in coordinate.
+- **Stato del nodo**: batteria (o alimentazione USB) nella barra di stato,
+  schermata Info con id nodo, collegamento, nodi noti.
+- **Sessione robusta**: handshake `want_config_id`, heartbeat periodico e
+  rinegoziazione automatica quando il nodo Meshtastic si riavvia.
+- **Zero dipendenze protobuf**: encoder/decoder minimale scritto a mano,
+  interamente coperto da test nativi eseguibili su PC.
 
 ## Hardware
 
@@ -77,20 +83,35 @@ meshtastic --set serial.enabled true \
 ```
 
 In modalità `PROTO` i pin del serial module parlano lo stesso protocollo
-protobuf del client API usato da app e CLI: la tastiera può quindi ricevere
-la configurazione, i nodi noti, gli ACK di consegna e i messaggi di testo.
+protobuf del client API usato da app e CLI: la tastiera riceve quindi
+configurazione, canali, nodi noti, telemetria, ACK di consegna e messaggi.
 
 ## Uso della tastiera
+
+### Composizione
 
 | Tasto | Azione |
 |---|---|
 | `2`–`9` | Lettere multi-tap (`2` = a→b→c→2→à) |
 | `1` | Punteggiatura: `. , ? ! ' " - @ / : 1` |
 | `0` | Spazio, poi `0` |
+| `0` lungo | Apre il **menu** |
 | `*` breve | Backspace (o annulla il carattere candidato) |
 | `*` lungo | Cancella tutto il messaggio |
-| `#` breve | Invia il messaggio (broadcast sul canale primario) |
+| `#` breve | Invia al destinatario/canale selezionati |
 | `#` lungo | Cambia modalità: `abc` → `ABC` → `123` |
+
+### Menu e liste
+
+| Tasto | Azione |
+|---|---|
+| `2` / `8` | Su / giù (nel dettaglio: scorri il testo) |
+| `5` o `#` | Seleziona |
+| `*` | Indietro |
+
+Voci del menu: **Destinatario** (broadcast o un nodo della mesh),
+**Canale** (tra quelli configurati sul nodo), **Messaggi** (storico con
+dettaglio), **Info** (id nodo, batteria, stato collegamento).
 
 Sequenze complete dei tasti:
 
@@ -137,25 +158,27 @@ tests/run_tests.sh
 
 I test coprono: multi-tap con accentate UTF-8, cambio modalità, backspace su
 caratteri multi-byte, limiti di lunghezza in byte, roundtrip
-encoder/decoder protobuf, struttura dei frame `ToRadio`, risincronizzazione
-del deframer su dati corrotti e parsing degli eventi `FromRadio`
-(MyNodeInfo, NodeInfo, messaggi di testo, ACK/NAK, config complete).
+encoder/decoder protobuf (varint, bytes, fixed32), struttura dei frame
+`ToRadio` (destinatario, canale, want_ack), risincronizzazione del deframer
+su dati corrotti e parsing degli eventi `FromRadio` (MyNodeInfo, NodeInfo
+con SNR/batteria/last_heard, canali, messaggi di testo, posizioni,
+telemetria, ACK/NAK, config complete, rebooted).
 
 ## Architettura
 
 ```
 src/
-├── main.cpp              # ciclo principale, gestione tasti e stato UI
+├── main.cpp              # ciclo principale, schermate, menu, storico
 ├── config.h              # pin, baud rate, timing, limiti
 ├── MatrixKeypad.*        # scansione matrice 4×3, debounce, pressione lunga
 ├── T9Engine.*            # multi-tap T9 UTF-8 e buffer del messaggio
-├── MeshtasticClient.*    # client API: handshake, heartbeat, nodi, ACK (Arduino)
-└── mesh/                 # logica pura, testabile in nativo
-    ├── ProtoWriter.*     # encoder protobuf minimale (varint + bytes)
-    ├── ProtoReader.*     # decoder protobuf minimale
-    └── MeshtasticCodec.* # frame 0x94C3, ToRadio/FromRadio, deframer
+├── MeshtasticClient.*    # client API: sessione, nodi, canali, ACK (Arduino)
+├── mesh/                 # logica pura, testabile in nativo
+│   ├── ProtoWriter.*     # encoder protobuf minimale (varint + bytes)
+│   ├── ProtoReader.*     # decoder protobuf minimale (varint, bytes, fixed32)
+│   └── MeshtasticCodec.* # frame 0x94C3, ToRadio/FromRadio, deframer
 ├── PreviewDisplay.*      # OLED 0.42": anteprima carattere (I2C0)
-├── UIDisplay.*           # OLED 128×64: interfaccia utente (I2C1)
+└── UIDisplay.*           # OLED 128×64: composizione, liste, dettaglio (I2C1)
 tests/
 ├── run_tests.sh          # compila ed esegue i test nativi
 ├── test_t9.cpp
@@ -167,26 +190,33 @@ tests/
 
 Ogni frame sulla UART è `0x94 0xC3 <len MSB> <len LSB> <protobuf>`
 (max 512 byte). All'avvio la tastiera invia `ToRadio{want_config_id}` e il
-nodo risponde con la configurazione, `MyNodeInfo` (il nostro id),
-`NodeInfo` per ogni nodo noto (da cui i nomi dei mittenti) e infine
-`config_complete_id`. Da lì:
+nodo risponde con la configurazione, `MyNodeInfo` (il nostro id), i
+`Channel` configurati, `NodeInfo` per ogni nodo noto (nomi, SNR, batteria)
+e infine `config_complete_id`. Da lì:
 
-- **Invio**: `ToRadio{packet: MeshPacket{to: broadcast, decoded:
+- **Invio**: `ToRadio{packet: MeshPacket{to, channel, decoded:
   Data{portnum: TEXT_MESSAGE_APP, payload}, id, want_ack}}`
-- **Ricezione**: `FromRadio{packet}` con `portnum TEXT_MESSAGE_APP`
-- **Esito**: `FromRadio{packet}` con `portnum ROUTING_APP` e
+- **Ricezione**: `FromRadio{packet}` con portnum `TEXT_MESSAGE_APP`
+  (testo), `POSITION_APP` (coordinate sfixed32) o `TELEMETRY_APP`
+  (batteria del nodo)
+- **Esito**: `FromRadio{packet}` con portnum `ROUTING_APP` e
   `request_id` uguale all'id inviato (`error_reason` assente = consegnato)
-- Un `ToRadio{heartbeat}` ogni 60 s tiene viva la sessione.
+- Un `ToRadio{heartbeat}` ogni 60 s tiene viva la sessione; se arriva
+  `FromRadio{rebooted}` l'handshake riparte automaticamente.
+
+### Cosa resta fuori (di proposito)
+
+Amministrazione remota del nodo, modifica della configurazione, canali via
+QR, trasferimento file e proxy MQTT sono compiti da app companion, non da
+tastiera: il nodo si configura una volta con la CLI/app e la tastiera fa la
+tastiera.
 
 ## Limiti noti e sviluppi futuri
 
-- I messaggi partono in **broadcast sul canale primario**: il protocollo
-  supporta già destinazione e canale arbitrari
-  (`MeshtasticClient::sendText` → `buildTextMessageFrame`), manca solo la UI
-  di selezione del destinatario.
-- La UI mostra solo l'**ultimo** messaggio ricevuto (niente storico).
 - Il font grande dell'anteprima (`logisoso28`) potrebbe non coprire le
   accentate su alcune versioni di U8g2: in quel caso il firmware ripiega
   automaticamente su un font più piccolo (`10x20_te`).
+- I messaggi diretti usano la cifratura del canale selezionato (il PKC dei
+  DM è gestito dal nodo, se disponibile sul suo firmware).
 - Idee: T9 predittivo con dizionario in flash, messaggi rapidi predefiniti,
   spegnimento display per risparmio energetico, buzzer di feedback.

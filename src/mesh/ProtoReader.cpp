@@ -31,8 +31,12 @@ bool ProtoReader::next() {
             _pos += _dataLen;
             return true;
         }
-        case 5:  // fixed32
+        case 5:  // fixed32 (little-endian)
             if (_len - _pos < 4) return false;
+            _fixed32 = static_cast<uint32_t>(_buf[_pos]) |
+                       (static_cast<uint32_t>(_buf[_pos + 1]) << 8) |
+                       (static_cast<uint32_t>(_buf[_pos + 2]) << 16) |
+                       (static_cast<uint32_t>(_buf[_pos + 3]) << 24);
             _pos += 4;
             return true;
         case 1:  // fixed64

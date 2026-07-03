@@ -7,7 +7,7 @@
 
 namespace meshproto {
 
-// Numeri di campo (da meshtastic/mesh.proto)
+// Numeri di campo (da meshtastic/mesh.proto, channel.proto, telemetry.proto)
 namespace fields {
 // ToRadio
 constexpr uint32_t TORADIO_PACKET = 1;
@@ -18,6 +18,8 @@ constexpr uint32_t FROMRADIO_PACKET = 2;
 constexpr uint32_t FROMRADIO_MY_INFO = 3;
 constexpr uint32_t FROMRADIO_NODE_INFO = 4;
 constexpr uint32_t FROMRADIO_CONFIG_COMPLETE_ID = 7;
+constexpr uint32_t FROMRADIO_REBOOTED = 8;
+constexpr uint32_t FROMRADIO_CHANNEL = 10;
 // MeshPacket
 constexpr uint32_t PACKET_FROM = 1;
 constexpr uint32_t PACKET_TO = 2;
@@ -34,11 +36,25 @@ constexpr uint32_t MYINFO_MY_NODE_NUM = 1;
 // NodeInfo
 constexpr uint32_t NODEINFO_NUM = 1;
 constexpr uint32_t NODEINFO_USER = 2;
+constexpr uint32_t NODEINFO_SNR = 4;
+constexpr uint32_t NODEINFO_LAST_HEARD = 5;
+constexpr uint32_t NODEINFO_DEVICE_METRICS = 6;
 // User
 constexpr uint32_t USER_LONG_NAME = 2;
 constexpr uint32_t USER_SHORT_NAME = 3;
 // Routing
 constexpr uint32_t ROUTING_ERROR_REASON = 3;
+// Channel / ChannelSettings
+constexpr uint32_t CHANNEL_INDEX = 1;
+constexpr uint32_t CHANNEL_SETTINGS = 2;
+constexpr uint32_t CHANNEL_ROLE = 3;
+constexpr uint32_t CHANNELSETTINGS_NAME = 3;
+// Position
+constexpr uint32_t POSITION_LATITUDE_I = 1;
+constexpr uint32_t POSITION_LONGITUDE_I = 2;
+// Telemetry / DeviceMetrics
+constexpr uint32_t TELEMETRY_DEVICE_METRICS = 2;
+constexpr uint32_t DEVICEMETRICS_BATTERY_LEVEL = 1;
 }  // namespace fields
 
 // ---------------------------------------------------------------------------
@@ -109,6 +125,43 @@ size_t buildHeartbeatFrame(uint8_t* out, size_t cap) {
 // Parsing FromRadio
 // ---------------------------------------------------------------------------
 
+static void parsePosition(const uint8_t* buf, size_t len, uint32_t fromNode,
+                          FromRadioHandler& handler) {
+    int32_t latI = 0;
+    int32_t lonI = 0;
+    bool seen = false;
+
+    ProtoReader r(buf, len);
+    while (r.next()) {
+        // latitude_i / longitude_i sono sfixed32.
+        if (r.field() == fields::POSITION_LATITUDE_I && r.wireType() == 5) {
+            latI = static_cast<int32_t>(r.fixed32());
+            seen = true;
+        } else if (r.field() == fields::POSITION_LONGITUDE_I && r.wireType() == 5) {
+            lonI = static_cast<int32_t>(r.fixed32());
+            seen = true;
+        }
+    }
+    if (seen) handler.onPosition(fromNode, latI, lonI);
+}
+
+static void parseTelemetry(const uint8_t* buf, size_t len, uint32_t fromNode,
+                           FromRadioHandler& handler) {
+    ProtoReader r(buf, len);
+    while (r.next()) {
+        if (r.field() == fields::TELEMETRY_DEVICE_METRICS && r.wireType() == 2) {
+            ProtoReader metrics(r.data(), r.dataLen());
+            while (metrics.next()) {
+                if (metrics.field() == fields::DEVICEMETRICS_BATTERY_LEVEL &&
+                    metrics.wireType() == 0) {
+                    handler.onTelemetry(fromNode,
+                                        static_cast<uint32_t>(metrics.varint()));
+                }
+            }
+        }
+    }
+}
+
 static void parseData(const uint8_t* buf, size_t len, uint32_t fromNode,
                       uint32_t channel, FromRadioHandler& handler) {
     uint32_t portnum = 0;
@@ -132,21 +185,35 @@ static void parseData(const uint8_t* buf, size_t len, uint32_t fromNode,
         }
     }
 
-    if (portnum == PORT_TEXT_MESSAGE && payload) {
-        handler.onTextMessage(fromNode, channel,
-                              reinterpret_cast<const char*>(payload), payloadLen);
-    } else if (portnum == PORT_ROUTING && requestId != 0) {
-        // Routing { error_reason } – assente in proto3 significa NONE (ACK).
-        uint32_t error = ROUTING_ERROR_NONE;
-        if (payload) {
-            ProtoReader routing(payload, payloadLen);
-            while (routing.next()) {
-                if (routing.field() == fields::ROUTING_ERROR_REASON) {
-                    error = static_cast<uint32_t>(routing.varint());
-                }
+    switch (portnum) {
+        case PORT_TEXT_MESSAGE:
+            if (payload) {
+                handler.onTextMessage(fromNode, channel,
+                                      reinterpret_cast<const char*>(payload),
+                                      payloadLen);
             }
-        }
-        handler.onRoutingResult(requestId, error);
+            break;
+        case PORT_POSITION:
+            if (payload) parsePosition(payload, payloadLen, fromNode, handler);
+            break;
+        case PORT_TELEMETRY:
+            if (payload) parseTelemetry(payload, payloadLen, fromNode, handler);
+            break;
+        case PORT_ROUTING:
+            if (requestId != 0) {
+                // Routing { error_reason } – assente in proto3 = NONE (ACK).
+                uint32_t error = ROUTING_ERROR_NONE;
+                if (payload) {
+                    ProtoReader routing(payload, payloadLen);
+                    while (routing.next()) {
+                        if (routing.field() == fields::ROUTING_ERROR_REASON) {
+                            error = static_cast<uint32_t>(routing.varint());
+                        }
+                    }
+                }
+                handler.onRoutingResult(requestId, error);
+            }
+            break;
     }
 }
 
@@ -178,33 +245,92 @@ static void parseMeshPacket(const uint8_t* buf, size_t len, FromRadioHandler& ha
 }
 
 static void parseNodeInfo(const uint8_t* buf, size_t len, FromRadioHandler& handler) {
-    uint32_t num = 0;
-    const char* shortName = nullptr;
-    size_t shortLen = 0;
-    const char* longName = nullptr;
-    size_t longLen = 0;
+    NodeInfoData info;
 
     ProtoReader r(buf, len);
     while (r.next()) {
-        if (r.field() == fields::NODEINFO_NUM) {
-            num = static_cast<uint32_t>(r.varint());
-        } else if (r.field() == fields::NODEINFO_USER && r.wireType() == 2) {
-            ProtoReader user(r.data(), r.dataLen());
-            while (user.next()) {
-                if (user.field() == fields::USER_SHORT_NAME) {
-                    shortName = reinterpret_cast<const char*>(user.data());
-                    shortLen = user.dataLen();
-                } else if (user.field() == fields::USER_LONG_NAME) {
-                    longName = reinterpret_cast<const char*>(user.data());
-                    longLen = user.dataLen();
+        switch (r.field()) {
+            case fields::NODEINFO_NUM:
+                info.num = static_cast<uint32_t>(r.varint());
+                break;
+            case fields::NODEINFO_USER:
+                if (r.wireType() == 2) {
+                    ProtoReader user(r.data(), r.dataLen());
+                    while (user.next()) {
+                        if (user.field() == fields::USER_SHORT_NAME) {
+                            info.shortName = reinterpret_cast<const char*>(user.data());
+                            info.shortLen = user.dataLen();
+                        } else if (user.field() == fields::USER_LONG_NAME) {
+                            info.longName = reinterpret_cast<const char*>(user.data());
+                            info.longLen = user.dataLen();
+                        }
+                    }
                 }
-            }
+                break;
+            case fields::NODEINFO_SNR:
+                if (r.wireType() == 5) {
+                    uint32_t bits = r.fixed32();
+                    float f;
+                    memcpy(&f, &bits, sizeof(f));
+                    info.snr = f;
+                }
+                break;
+            case fields::NODEINFO_LAST_HEARD:
+                // fixed32 nel proto attuale; gestiamo anche varint per
+                // compatibilità con firmware più vecchi.
+                if (r.wireType() == 5) {
+                    info.lastHeard = r.fixed32();
+                } else if (r.wireType() == 0) {
+                    info.lastHeard = static_cast<uint32_t>(r.varint());
+                }
+                break;
+            case fields::NODEINFO_DEVICE_METRICS:
+                if (r.wireType() == 2) {
+                    ProtoReader metrics(r.data(), r.dataLen());
+                    while (metrics.next()) {
+                        if (metrics.field() == fields::DEVICEMETRICS_BATTERY_LEVEL &&
+                            metrics.wireType() == 0) {
+                            info.batteryLevel = static_cast<int>(metrics.varint());
+                        }
+                    }
+                }
+                break;
         }
     }
 
-    if (num != 0) {
-        handler.onNodeInfo(num, shortName, shortLen, longName, longLen);
+    if (info.num != 0) handler.onNodeInfo(info);
+}
+
+static void parseChannel(const uint8_t* buf, size_t len, FromRadioHandler& handler) {
+    uint32_t index = 0;
+    uint32_t role = CHANNEL_ROLE_DISABLED;
+    const char* name = nullptr;
+    size_t nameLen = 0;
+
+    ProtoReader r(buf, len);
+    while (r.next()) {
+        switch (r.field()) {
+            case fields::CHANNEL_INDEX:
+                index = static_cast<uint32_t>(r.varint());
+                break;
+            case fields::CHANNEL_ROLE:
+                role = static_cast<uint32_t>(r.varint());
+                break;
+            case fields::CHANNEL_SETTINGS:
+                if (r.wireType() == 2) {
+                    ProtoReader settings(r.data(), r.dataLen());
+                    while (settings.next()) {
+                        if (settings.field() == fields::CHANNELSETTINGS_NAME) {
+                            name = reinterpret_cast<const char*>(settings.data());
+                            nameLen = settings.dataLen();
+                        }
+                    }
+                }
+                break;
+        }
     }
+
+    if (index < MAX_CHANNELS) handler.onChannel(index, name, nameLen, role);
 }
 
 void parseFromRadio(const uint8_t* payload, size_t len, FromRadioHandler& handler) {
@@ -229,6 +355,12 @@ void parseFromRadio(const uint8_t* payload, size_t len, FromRadioHandler& handle
                 break;
             case fields::FROMRADIO_CONFIG_COMPLETE_ID:
                 handler.onConfigComplete(static_cast<uint32_t>(r.varint()));
+                break;
+            case fields::FROMRADIO_REBOOTED:
+                if (r.varint() != 0) handler.onRebooted();
+                break;
+            case fields::FROMRADIO_CHANNEL:
+                if (r.wireType() == 2) parseChannel(r.data(), r.dataLen(), handler);
                 break;
         }
     }
