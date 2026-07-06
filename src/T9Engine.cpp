@@ -132,6 +132,20 @@ void T9Engine::clear() {
     _text = "";
 }
 
+void T9Engine::setText(const String& s) {
+    _pendingKey = 0;
+    _pendingIndex = 0;
+    _text = s;
+    while (_text.length() > MESSAGE_MAX_LEN) {
+        // Tronca senza spezzare un carattere UTF-8.
+        int cut = _text.length() - 1;
+        while (cut > 0 && (static_cast<uint8_t>(_text.charAt(cut)) & 0xC0) == 0x80) {
+            --cut;
+        }
+        _text.remove(cut);
+    }
+}
+
 void T9Engine::cycleMode() {
     commitPending();
     switch (_mode) {

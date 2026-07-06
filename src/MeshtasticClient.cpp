@@ -134,6 +134,12 @@ void MeshtasticClient::onNodeInfo(const meshproto::NodeInfoData& info) {
     copyUtf8(slot->shortName, SHORT_NAME_LEN, info.shortName, info.shortLen);
     copyUtf8(slot->longName, LONG_NAME_LEN, info.longName, info.longLen);
     if (info.lastHeard) slot->lastHeard = info.lastHeard;
+    if (info.snr != 0.0f) {
+        float snr = info.snr;
+        if (snr > 127.0f) snr = 127.0f;
+        if (snr < -127.0f) snr = -127.0f;
+        slot->snrDb = static_cast<int8_t>(snr);
+    }
     markDirty();
 }
 

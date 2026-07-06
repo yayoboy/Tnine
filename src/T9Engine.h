@@ -24,6 +24,8 @@ public:
     bool backspace();   // annulla il candidato, oppure cancella l'ultimo carattere
     void clear();
     void cycleMode();
+    // Sostituisce il testo (es. messaggio rapido), troncato a MESSAGE_MAX_LEN.
+    void setText(const String& s);
 
     bool hasPending() const { return _pendingKey != 0; }
     String candidate() const;   // carattere candidato UTF-8 ("" se nessuno)

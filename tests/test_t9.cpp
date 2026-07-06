@@ -77,6 +77,19 @@ int main() {
     assert(t9.candidate() == ",");
     t9.clear();
 
+    // setText (messaggi rapidi): sostituisce il testo e tronca in modo
+    // UTF-8-safe
+    t9.setText("Posizione?");
+    assert(t9.text() == "Posizione?");
+    {
+        String longMsg;
+        for (size_t i = 0; i < MESSAGE_MAX_LEN + 3; ++i) longMsg += "à";  // 2 byte l'uno
+        t9.setText(longMsg);
+        assert(t9.text().length() <= MESSAGE_MAX_LEN);
+        assert(t9.text().length() % 2 == 0);  // nessuna 'à' spezzata
+    }
+    t9.clear();
+
     // Limite in byte: mai oltre MESSAGE_MAX_LEN
     for (size_t i = 0; i < MESSAGE_MAX_LEN + 50; ++i) {
         t9.handleKey('2', now += 1000);

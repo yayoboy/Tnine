@@ -21,17 +21,23 @@ il **serial module in modalità `PROTO`** (client API protobuf).
 
 ## Caratteristiche
 
+- **UI "Retro '84"**: interfaccia a finestre bitmap (barra titolo a righe,
+  scrollbar tratteggiate, gauge con pomello, pulsanti arrotondati) fedele al
+  prototipo pixel-perfect in `docs/ui-prototype/`.
 - **Input T9 multi-tap** in stile telefonico, con lettere accentate italiane
   (`à è é ì ò ù`) e tre modalità: minuscole, maiuscole, numeri.
 - **Anteprima del carattere** in grande sull'OLED 0.42" mentre si compone.
+- **Messaggi rapidi** predefiniti ("Ok", "Arrivo tra poco", "Posizione?",
+  "Aiuto! SOS"…) selezionabili dal menu e modificabili prima dell'invio.
 - **Messaggi diretti**: destinatario selezionabile dalla lista dei nodi
   della mesh (broadcast di default), con nomi presi dal database nodi.
 - **Selezione canale**: lista dei canali configurati sul nodo, con i loro
   nomi.
 - **Conferme di consegna**: ACK/NAK end-to-end con motivo dell'errore
   (`consegnato`, `timeout`, `no route`…).
-- **Storico messaggi**: gli ultimi 8 messaggi ricevuti, con mittente e
-  vista dettaglio scorrevole; le **posizioni** ricevute vengono decodificate
+- **Storico messaggi**: gli ultimi 8 messaggi ricevuti con contatore dei non
+  letti, vista dettaglio scorrevole e pulsante **RISPONDI** che imposta il
+  mittente come destinatario; le **posizioni** ricevute vengono decodificate
   in coordinate.
 - **Stato del nodo**: batteria (o alimentazione USB) nella barra di stato,
   schermata Info con id nodo, collegamento, nodi noti.
@@ -106,12 +112,18 @@ configurazione, canali, nodi noti, telemetria, ACK di consegna e messaggi.
 | Tasto | Azione |
 |---|---|
 | `2` / `8` | Su / giù (nel dettaglio: scorri il testo) |
-| `5` o `#` | Seleziona |
+| `4` / `6` | Nel dettaglio messaggio: cambia pulsante (RISPONDI/CHIUDI) |
+| `5` o `#` | Seleziona / attiva il pulsante |
 | `*` | Indietro |
 
-Voci del menu: **Destinatario** (broadcast o un nodo della mesh),
-**Canale** (tra quelli configurati sul nodo), **Messaggi** (storico con
-dettaglio), **Info** (id nodo, batteria, stato collegamento).
+Voci del menu: **Destinatario** (broadcast o un nodo della mesh, con barre
+di segnale da SNR), **Canale** (tra quelli configurati sul nodo),
+**Messaggi** (storico con dettaglio e risposta rapida), **Msg rapidi**
+(frasi predefinite caricate nell'editor), **Info** (id nodo, gauge
+batteria, stato collegamento).
+
+All'accensione una schermata di avvio mostra l'avanzamento della
+connessione al nodo; qualsiasi tasto la salta.
 
 Sequenze complete dei tasti:
 
@@ -177,8 +189,10 @@ src/
 │   ├── ProtoWriter.*     # encoder protobuf minimale (varint + bytes)
 │   ├── ProtoReader.*     # decoder protobuf minimale (varint, bytes, fixed32)
 │   └── MeshtasticCodec.* # frame 0x94C3, ToRadio/FromRadio, deframer
+├── RetroUI.*             # kit widget "Retro '84" su U8g2 (dal prototipo)
 ├── PreviewDisplay.*      # OLED 0.42": anteprima carattere (I2C0)
-└── UIDisplay.*           # OLED 128×64: composizione, liste, dettaglio (I2C1)
+└── UIDisplay.*           # OLED 128×64: boot, composizione, liste, info (I2C1)
+docs/ui-prototype/        # prototipo HTML pixel-perfect della UI (emulatore)
 tests/
 ├── run_tests.sh          # compila ed esegue i test nativi
 ├── test_t9.cpp

@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet data-dc-atomics><meta name="design_doc_mode" content="canvas"><style>
+body{margin:0;background:#f2f1ed;color:#1d1c19;font-family:Helvetica,Arial,sans-serif}
+.turn{padding:44px;display:flex;flex-direction:column;gap:28px}
+.intro{max-width:860px}
+.h1{font-size:26px;font-weight:700;letter-spacing:-0.02em;margin:0 0 10px}
+.legend{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;color:#6c6961;line-height:1.7;margin:0}
+.row{display:flex;gap:36px;align-items:flex-start;flex-wrap:wrap}
+.opt{background:#fff;border:1px solid #dcdad3;border-radius:12px;padding:26px;display:flex;flex-direction:column;gap:14px}
+.opthead{display:flex;align-items:baseline;gap:12px}
+.badge{font-family:ui-monospace,Menlo,monospace;font-size:12px;font-weight:700;background:#1d1c19;color:#fff;padding:3px 9px;border-radius:5px}
+.optname{font-size:17px;font-weight:700;margin:0}
+.optdesc{font-size:13px;color:#6c6961;margin:0;max-width:560px;line-height:1.5}
+.screens{display:grid;grid-template-columns:repeat(2,max-content);gap:22px;margin-top:6px}
+.fig{margin:0;display:flex;flex-direction:column;gap:8px}
+.bez{background:#14181d;padding:14px;border-radius:9px;line-height:0;width:max-content}
+.cap{font-family:ui-monospace,Menlo,monospace;font-size:11px;letter-spacing:0.06em;text-transform:uppercase;color:#6c6961}
+</style></helmet>
+<section class="turn">
+<div class="row">
+<div class="opt" id="2a"><div class="opthead"><span class="badge">2a</span><h2 class="optname">Retro '84</h2></div><p class="optdesc">Kit bitmap integrato: finestre con barra titolo a righe, scrollbar tratteggiate, slider con pomello + bubble valore, campo ricerca con lente, dropdown con spinner ▲▼, pulsanti arrotondati, stepper −/+, toggle, checkbox, radio e step-tab a chevron — tutto sulla griglia 128×64.</p><div class="screens">
+<figure class="fig"><div class="bez"><x-import component-from-global-scope="oled-screen" from="./oled.js" screen="d-boot" scale="{{ scale }}" grid="{{ grid }}" paper="{{ paper }}" hint-size="512px,256px"></x-import></div><figcaption class="cap">Boot — finestra + slider</figcaption></figure>
+<figure class="fig"><div class="bez"><x-import component-from-global-scope="oled-screen" from="./oled.js" screen="d-home" scale="{{ scale }}" grid="{{ grid }}" paper="{{ paper }}" hint-size="512px,256px"></x-import></div><figcaption class="cap">Home — gauge batt/util</figcaption></figure>
+<figure class="fig"><div class="bez"><x-import component-from-global-scope="oled-screen" from="./oled.js" screen="d-nodes" scale="{{ scale }}" grid="{{ grid }}" paper="{{ paper }}" hint-size="512px,256px"></x-import></div><figcaption class="cap">Nodi — scrollbar + ricerca</figcaption></figure>
+<figure class="fig"><div class="bez"><x-import component-from-global-scope="oled-screen" from="./oled.js" screen="d-msgs" scale="{{ scale }}" grid="{{ grid }}" paper="{{ paper }}" hint-size="512px,256px"></x-import></div><figcaption class="cap">Messaggi — pulsanti</figcaption></figure>
+<figure class="fig"><div class="bez"><x-import component-from-global-scope="oled-screen" from="./oled.js" screen="d-comp" scale="{{ scale }}" grid="{{ grid }}" paper="{{ paper }}" hint-size="512px,256px"></x-import></div><figcaption class="cap">Componi — dropdown + step</figcaption></figure>
+<figure class="fig"><div class="bez"><x-import component-from-global-scope="oled-screen" from="./oled.js" screen="d-gps" scale="{{ scale }}" grid="{{ grid }}" paper="{{ paper }}" hint-size="512px,256px"></x-import></div><figcaption class="cap">GPS — grafico SNR</figcaption></figure>
+<figure class="fig"><div class="bez"><x-import component-from-global-scope="oled-screen" from="./oled.js" screen="d-cfg" scale="{{ scale }}" grid="{{ grid }}" paper="{{ paper }}" hint-size="512px,256px"></x-import></div><figcaption class="cap">Config — form completo</figcaption></figure>
+</div></div>
+</div>
+</section>
+<section class="turn">
+<header class="intro"><h1 class="h1">UI OLED 128×64 · Meshtastic</h1><p class="legend">1 cella = 1 pixel reale · font 5×7 (passo 6px) e 2× (10×14, passo 12px) · righe testo a passo 9-10px · disegno replicabile con U8g2 (drawPixel/drawBox/drawStr) · Tweaks: scala, griglia pixel, modalità carta</p></header>
+<div class="row">
+<div class="opt" id="1a"><div class="opthead"><span class="badge">1a</span><h2 class="optname">Denso</h2></div><p class="optdesc">Barra di stato in alto, liste fitte con riga selezionata invertita, footer con hint tasti ↑↓/OK. Massima informazione per schermata.</p><div class="screens">
+<figure class="fig"><div class="bez"><x-import component-from-global-scope="oled-screen" from="./oled.js" screen="a-boot" scale="{{ scale }}" grid="{{ grid }}" paper="{{ paper }}" hint-size="512px,256px"></x-import></div><figcaption class="cap">Boot — splash avvio</figcaption></figure>
+<figure class="fig"><div class="bez"><x-import component-from-global-scope="oled-screen" from="./oled.js" screen="a-home" scale="{{ scale }}" grid="{{ grid }}" paper="{{ paper }}" hint-size="512px,256px"></x-import></div><figcaption class="cap">Home — stato nodo</figcaption></figure>
+<figure class="fig"><div class="bez"><x-import component-from-global-scope="oled-screen" from="./oled.js" screen="a-nodes" scale="{{ scale }}" grid="{{ grid }}" paper="{{ paper }}" hint-size="512px,256px"></x-import></div><figcaption class="cap">Nodi — lista + segnale</figcaption></figure>
+<figure class="fig"><div class="bez"><x-import component-from-global-scope="oled-screen" from="./oled.js" screen="a-msgs" scale="{{ scale }}" grid="{{ grid }}" paper="{{ paper }}" hint-size="512px,256px"></x-import></div><figcaption class="cap">Messaggi — ricevuti</figcaption></figure>
+<figure class="fig"><div class="bez"><x-import component-from-global-scope="oled-screen" from="./oled.js" screen="a-comp" scale="{{ scale }}" grid="{{ grid }}" paper="{{ paper }}" hint-size="512px,256px"></x-import></div><figcaption class="cap">Componi — msg rapidi</figcaption></figure>
+<figure class="fig"><div class="bez"><x-import component-from-global-scope="oled-screen" from="./oled.js" screen="a-gps" scale="{{ scale }}" grid="{{ grid }}" paper="{{ paper }}" hint-size="512px,256px"></x-import></div><figcaption class="cap">GPS — posizione</figcaption></figure>
+<figure class="fig"><div class="bez"><x-import component-from-global-scope="oled-screen" from="./oled.js" screen="a-cfg" scale="{{ scale }}" grid="{{ grid }}" paper="{{ paper }}" hint-size="512px,256px"></x-import></div><figcaption class="cap">Config — impostazioni</figcaption></figure>
+</div></div>
+<div class="opt" id="1b"><div class="opthead"><span class="badge">1b</span><h2 class="optname">Minimale</h2></div><p class="optdesc">Un dato per schermata a caratteri 2×, leggibile a colpo d'occhio. Navigazione a pagine con indicatore a puntini in basso.</p><div class="screens">
+<figure class="fig"><div class="bez"><x-import component-from-global-scope="oled-screen" from="./oled.js" screen="b-boot" scale="{{ scale }}" grid="{{ grid }}" paper="{{ paper }}" hint-size="512px,256px"></x-import></div><figcaption class="cap">Boot — splash avvio</figcaption></figure>
+<figure class="fig"><div class="bez"><x-import component-from-global-scope="oled-screen" from="./oled.js" screen="b-home" scale="{{ scale }}" grid="{{ grid }}" paper="{{ paper }}" hint-size="512px,256px"></x-import></div><figcaption class="cap">Home — stato nodo</figcaption></figure>
+<figure class="fig"><div class="bez"><x-import component-from-global-scope="oled-screen" from="./oled.js" screen="b-nodes" scale="{{ scale }}" grid="{{ grid }}" paper="{{ paper }}" hint-size="512px,256px"></x-import></div><figcaption class="cap">Nodi — uno alla volta</figcaption></figure>
+<figure class="fig"><div class="bez"><x-import component-from-global-scope="oled-screen" from="./oled.js" screen="b-msgs" scale="{{ scale }}" grid="{{ grid }}" paper="{{ paper }}" hint-size="512px,256px"></x-import></div><figcaption class="cap">Messaggi — lettura 2×</figcaption></figure>
+<figure class="fig"><div class="bez"><x-import component-from-global-scope="oled-screen" from="./oled.js" screen="b-comp" scale="{{ scale }}" grid="{{ grid }}" paper="{{ paper }}" hint-size="512px,256px"></x-import></div><figcaption class="cap">Componi — msg rapidi</figcaption></figure>
+<figure class="fig"><div class="bez"><x-import component-from-global-scope="oled-screen" from="./oled.js" screen="b-gps" scale="{{ scale }}" grid="{{ grid }}" paper="{{ paper }}" hint-size="512px,256px"></x-import></div><figcaption class="cap">GPS — posizione</figcaption></figure>
+<figure class="fig"><div class="bez"><x-import component-from-global-scope="oled-screen" from="./oled.js" screen="b-cfg" scale="{{ scale }}" grid="{{ grid }}" paper="{{ paper }}" hint-size="512px,256px"></x-import></div><figcaption class="cap">Config — impostazioni</figcaption></figure>
+</div></div>
+<div class="opt" id="1c"><div class="opthead"><span class="badge">1c</span><h2 class="optname">Icone</h2></div><p class="optdesc">Tab bar a icone in basso (home · nodi · msg · gps · config), tile grafici, selezione a riquadro invece che invertita.</p><div class="screens">
+<figure class="fig"><div class="bez"><x-import component-from-global-scope="oled-screen" from="./oled.js" screen="c-boot" scale="{{ scale }}" grid="{{ grid }}" paper="{{ paper }}" hint-size="512px,256px"></x-import></div><figcaption class="cap">Boot — logo mesh</figcaption></figure>
+<figure class="fig"><div class="bez"><x-import component-from-global-scope="oled-screen" from="./oled.js" screen="c-home" scale="{{ scale }}" grid="{{ grid }}" paper="{{ paper }}" hint-size="512px,256px"></x-import></div><figcaption class="cap">Home — tile 2×2</figcaption></figure>
+<figure class="fig"><div class="bez"><x-import component-from-global-scope="oled-screen" from="./oled.js" screen="c-nodes" scale="{{ scale }}" grid="{{ grid }}" paper="{{ paper }}" hint-size="512px,256px"></x-import></div><figcaption class="cap">Nodi — lista + barre</figcaption></figure>
+<figure class="fig"><div class="bez"><x-import component-from-global-scope="oled-screen" from="./oled.js" screen="c-msgs" scale="{{ scale }}" grid="{{ grid }}" paper="{{ paper }}" hint-size="512px,256px"></x-import></div><figcaption class="cap">Messaggi — bolla</figcaption></figure>
+<figure class="fig"><div class="bez"><x-import component-from-global-scope="oled-screen" from="./oled.js" screen="c-comp" scale="{{ scale }}" grid="{{ grid }}" paper="{{ paper }}" hint-size="512px,256px"></x-import></div><figcaption class="cap">Componi — griglia 2×3</figcaption></figure>
+<figure class="fig"><div class="bez"><x-import component-from-global-scope="oled-screen" from="./oled.js" screen="c-gps" scale="{{ scale }}" grid="{{ grid }}" paper="{{ paper }}" hint-size="512px,256px"></x-import></div><figcaption class="cap">GPS — mirino + sat</figcaption></figure>
+<figure class="fig"><div class="bez"><x-import component-from-global-scope="oled-screen" from="./oled.js" screen="c-cfg" scale="{{ scale }}" grid="{{ grid }}" paper="{{ paper }}" hint-size="512px,256px"></x-import></div><figcaption class="cap">Config — impostazioni</figcaption></figure>
+</div></div>
+</div>
+</section>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;scale&quot;:{&quot;editor&quot;:&quot;range&quot;,&quot;default&quot;:4,&quot;min&quot;:3,&quot;max&quot;:8,&quot;step&quot;:1,&quot;unit&quot;:&quot;x&quot;,&quot;tsType&quot;:&quot;number&quot;,&quot;section&quot;:&quot;Display&quot;},&quot;grid&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Display&quot;},&quot;paper&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Display&quot;}}">
+class Component extends DCLogic {
+  renderVals() {
+    return {
+      scale: String(this.props.scale ?? 4),
+      grid: String(this.props.grid ?? false),
+      paper: String(this.props.paper ?? false)
+    };
+  }
+}
+</script>
+</body>
+</html>

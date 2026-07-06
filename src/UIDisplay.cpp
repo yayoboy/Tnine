@@ -3,24 +3,25 @@
 #include <U8g2lib.h>
 #include <Wire.h>
 
+#include "RetroUI.h"
 #include "T9Engine.h"
 #include "config.h"
 
 // _2ND_HW_I2C usa Wire1 sul core arduino-pico.
 static U8G2_SSD1306_128X64_NONAME_F_2ND_HW_I2C u8g2(U8G2_R0);
 
-// Font 6x12 -> 21 colonne su 128 px.
-static constexpr int COLS = 21;
-static constexpr int COMPOSE_LINES = 3;
+// Corpo testo 6x12 dentro la finestra -> 20 colonne utili.
+static constexpr int BODY_COLS = 20;
 static constexpr int LIST_ROWS = 4;
-static constexpr int DETAIL_ROWS = 4;
 
-// Byte iniziali di un carattere UTF-8 (esclude i byte di continuazione).
+using namespace retroui;
+
+// --- Utilità UTF-8 -----------------------------------------------------------
+
 static bool isUtf8Start(char c) {
     return (static_cast<uint8_t>(c) & 0xC0) != 0x80;
 }
 
-// Numero di caratteri (codepoint) in una stringa UTF-8.
 static int utf8Length(const String& s) {
     int n = 0;
     for (unsigned i = 0; i < s.length(); ++i) {
@@ -29,7 +30,6 @@ static int utf8Length(const String& s) {
     return n;
 }
 
-// Indice del byte che inizia il carattere numero `glyphIdx`.
 static unsigned utf8ByteIndex(const String& s, int glyphIdx) {
     int n = 0;
     for (unsigned i = 0; i < s.length(); ++i) {
@@ -41,10 +41,23 @@ static unsigned utf8ByteIndex(const String& s, int glyphIdx) {
     return s.length();
 }
 
-// Tronca a maxGlyphs caratteri aggiungendo '>' se necessario.
 static String truncated(const String& s, int maxGlyphs) {
     if (utf8Length(s) <= maxGlyphs) return s;
     return s.substring(0, utf8ByteIndex(s, maxGlyphs - 1)) + ">";
+}
+
+// Disegna il corpo testo (font 6x12, accenti supportati) a partire dalla
+// riga `firstLine`, per `rows` righe, dentro la finestra.
+static void drawBody(const String& text, int firstLine, int rows) {
+    u8g2.setFont(u8g2_font_6x12_te);
+    int total = (utf8Length(text) + BODY_COLS - 1) / BODY_COLS;
+    int y = 13;
+    for (int line = firstLine; line < total && line < firstLine + rows; ++line) {
+        unsigned from = utf8ByteIndex(text, line * BODY_COLS);
+        unsigned to = utf8ByteIndex(text, (line + 1) * BODY_COLS);
+        u8g2.drawUTF8(3, y, text.substring(from, to).c_str());
+        y += 12;
+    }
 }
 
 void UIDisplay::begin() {
@@ -52,112 +65,146 @@ void UIDisplay::begin() {
     Wire1.setSCL(PIN_UI_SCL);
     u8g2.begin();
     u8g2.enableUTF8Print();
+    // Coordinate testo "top": i valori del prototipo si trasferiscono 1:1.
+    u8g2.setFontPosTop();
 }
 
-void UIDisplay::renderCompose(const T9Engine& t9, const String& lastRx,
-                              const String& statusRight) {
+// --- Boot ----------------------------------------------------------------------
+
+void UIDisplay::renderBoot(int progressPct) {
     u8g2.clearBuffer();
-    u8g2.setFont(u8g2_font_6x12_te);
+    win(u8g2, 0, 0, 128, 64, "TNINE", "T9 MESH");
+    u8g2.setFont(u8g2_font_10x20_tf);
+    u8g2.drawStr(64 - u8g2.getStrWidth("TNINE") / 2, 16, "TNINE");
+    gauge(u8g2, 8, 42, 84, progressPct);
+    text5x7R(u8g2, 124, 41, String(progressPct) + "%");
+    text5x7(u8g2, 8, 53, "CONNESSIONE MESH...");
+    u8g2.sendBuffer();
+}
 
-    // --- Barra di stato -----------------------------------------------------
-    char bar[32];
-    snprintf(bar, sizeof(bar), "%s %3u/%u", t9.modeLabel(),
-             static_cast<unsigned>(t9.text().length()),
-             static_cast<unsigned>(MESSAGE_MAX_LEN));
-    u8g2.drawStr(0, 9, bar);
+// --- Composizione ----------------------------------------------------------------
 
-    if (statusRight.length() > 0) {
-        int w = u8g2.getUTF8Width(statusRight.c_str());
-        u8g2.drawUTF8(128 - w, 9, statusRight.c_str());
-    }
-    u8g2.drawHLine(0, 11, 128);
+void UIDisplay::renderCompose(const T9Engine& t9, const String& titleRight,
+                              int battPct, uint8_t unread) {
+    u8g2.clearBuffer();
+    win(u8g2, 0, 0, 128, 64, "COMPONI", titleRight);
 
-    // --- Area di composizione: coda del testo + candidato + cursore ---------
+    // Corpo: coda del testo + candidato + cursore, 3 righe.
     String compose = t9.text();
     compose += t9.candidate();
-    compose += '_';  // cursore
+    compose += '_';
+    int total = (utf8Length(compose) + BODY_COLS - 1) / BODY_COLS;
+    drawBody(compose, max(0, total - 3), 3);
 
-    // A capo per caratteri (non per byte: gli accenti sono multi-byte).
-    int totalGlyphs = utf8Length(compose);
-    int totalLines = (totalGlyphs + COLS - 1) / COLS;
-    int firstLine = max(0, totalLines - COMPOSE_LINES);
-    int y = 22;
-    for (int line = firstLine; line < totalLines; ++line) {
-        unsigned from = utf8ByteIndex(compose, line * COLS);
-        unsigned to = utf8ByteIndex(compose, (line + 1) * COLS);
-        String chunk = compose.substring(from, to);
-        u8g2.drawUTF8(0, y, chunk.c_str());
-        y += 12;
+    // Footer: modalità, contatore, nuovi messaggi, batteria.
+    u8g2.drawHLine(1, 50, 126);
+    text5x7(u8g2, 3, 54, t9.modeLabel());
+    char cnt[16];
+    snprintf(cnt, sizeof(cnt), "%u/%u",
+             static_cast<unsigned>(t9.text().length()),
+             static_cast<unsigned>(MESSAGE_MAX_LEN));
+    text5x7(u8g2, 24, 54, cnt);
+
+    if (unread > 0) {
+        envelope(u8g2, 62, 54);
+        text5x7(u8g2, 74, 54, String(unread));
     }
 
-    // --- Ultimo messaggio ricevuto -------------------------------------------
-    u8g2.drawHLine(0, 52, 128);
-    String rx = lastRx.length() > 0 ? lastRx : String("-");
-    u8g2.drawUTF8(0, 63, truncated(rx, COLS).c_str());
+    if (battPct > 100) {
+        text5x7R(u8g2, 124, 54, "USB");
+    } else if (battPct >= 0) {
+        gauge(u8g2, 94, 55, 30, battPct);
+    }
 
     u8g2.sendBuffer();
 }
 
-void UIDisplay::renderList(const char* title, const String* items, int count,
-                           int selected) {
+// --- Liste -----------------------------------------------------------------------
+
+void UIDisplay::renderList(const char* title, const String& titleRight,
+                           const String* items, int count, int selected,
+                           const int8_t* bars) {
     u8g2.clearBuffer();
-    u8g2.setFont(u8g2_font_6x12_te);
+    win(u8g2, 0, 0, 128, 64, title, titleRight);
 
-    u8g2.drawUTF8(0, 9, title);
-    if (count > LIST_ROWS) {
-        char pos[12];
-        snprintf(pos, sizeof(pos), "%d/%d", selected + 1, count);
-        int w = u8g2.getStrWidth(pos);
-        u8g2.drawStr(128 - w, 9, pos);
-    }
-    u8g2.drawHLine(0, 11, 128);
+    bool scrollbar = count > LIST_ROWS;
+    int rowW = scrollbar ? 114 : 124;
+    int textCols = (bars ? 14 : rowW / 5 - 1);
 
-    // Finestra di scorrimento intorno alla voce selezionata.
     int first = 0;
     if (selected >= LIST_ROWS) first = selected - LIST_ROWS + 1;
     if (first > count - LIST_ROWS) first = max(0, count - LIST_ROWS);
 
-    int y = 23;
     for (int i = first; i < count && i < first + LIST_ROWS; ++i) {
-        if (i == selected) {
-            u8g2.drawBox(0, y - 10, 128, 13);
-            u8g2.setDrawColor(0);
+        int y = 13 + (i - first) * 12;
+        bool sel = (i == selected);
+        if (sel) u8g2.drawBox(2, y - 1, rowW, 11);
+        if (sel) u8g2.setDrawColor(0);
+        text5x7(u8g2, 4, y + 1, truncated(items[i], textCols));
+        if (bars && bars[i] >= 0) {
+            retroui::bars(u8g2, rowW - 12, y + 8, bars[i]);
         }
-        u8g2.drawUTF8(2, y, truncated(items[i], COLS - 1).c_str());
         u8g2.setDrawColor(1);
-        y += 13;
     }
+
+    if (scrollbar) vscroll(u8g2, 119, 12, 50, selected, count, LIST_ROWS);
 
     u8g2.sendBuffer();
 }
 
-void UIDisplay::renderDetail(const char* title, const String& text, int scrollLine) {
+// --- Dettaglio ----------------------------------------------------------------------
+
+void UIDisplay::renderDetail(const char* title, const String& titleRight,
+                             const String& text, int scrollLine,
+                             const char* btnA, const char* btnB, int selBtn) {
     u8g2.clearBuffer();
-    u8g2.setFont(u8g2_font_6x12_te);
+    win(u8g2, 0, 0, 128, 64, title, titleRight);
 
-    u8g2.drawUTF8(0, 9, title);
+    bool buttons = (btnA != nullptr);
+    int rows = buttons ? 3 : 4;
+    drawBody(text, scrollLine, rows);
+
     int total = detailLines(text);
-    if (total > DETAIL_ROWS) {
-        char pos[16];
-        snprintf(pos, sizeof(pos), "%d-%d/%d", scrollLine + 1,
-                 min(scrollLine + DETAIL_ROWS, total), total);
-        int w = u8g2.getStrWidth(pos);
-        u8g2.drawStr(128 - w, 9, pos);
+    if (total > rows) {
+        vscroll(u8g2, 119, 12, buttons ? 35 : 50, scrollLine, total, rows);
     }
-    u8g2.drawHLine(0, 11, 128);
 
-    int y = 23;
-    for (int line = scrollLine;
-         line < total && line < scrollLine + DETAIL_ROWS; ++line) {
-        unsigned from = utf8ByteIndex(text, line * COLS);
-        unsigned to = utf8ByteIndex(text, (line + 1) * COLS);
-        u8g2.drawUTF8(0, y, text.substring(from, to).c_str());
-        y += 13;
+    if (buttons) {
+        button(u8g2, 3, 49, 58, 13, btnA, selBtn == 0);
+        if (btnB) button(u8g2, 66, 49, 46, 13, btnB, selBtn == 1);
     }
 
     u8g2.sendBuffer();
 }
 
 int UIDisplay::detailLines(const String& text) {
-    return max(1, (utf8Length(text) + COLS - 1) / COLS);
+    return max(1, (utf8Length(text) + BODY_COLS - 1) / BODY_COLS);
+}
+
+// --- Info -------------------------------------------------------------------------
+
+void UIDisplay::renderInfo(const String& nodeId, int battPct, bool linkOk,
+                           int nodeCount, const String& dest, const String& chan) {
+    u8g2.clearBuffer();
+    win(u8g2, 0, 0, 128, 64, "INFO", nodeId);
+
+    text5x7(u8g2, 4, 14, "BATT");
+    if (battPct > 100) {
+        text5x7(u8g2, 34, 14, "ALIMENTATO USB");
+    } else if (battPct >= 0) {
+        gauge(u8g2, 34, 15, 60, battPct);
+        text5x7R(u8g2, 124, 14, String(battPct) + "%");
+    } else {
+        text5x7(u8g2, 34, 14, "?");
+    }
+
+    text5x7(u8g2, 4, 26, String("NODI ") + String(nodeCount));
+    text5x7R(u8g2, 124, 26, linkOk ? "MESH OK" : "ATTESA...");
+
+    dotted(u8g2, 4, 36, 120);
+
+    text5x7(u8g2, 4, 41, String("DEST   ") + dest);
+    text5x7(u8g2, 4, 51, String("CANALE ") + chan);
+
+    u8g2.sendBuffer();
 }

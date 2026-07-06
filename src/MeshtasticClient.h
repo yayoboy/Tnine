@@ -26,6 +26,7 @@ public:
         char shortName[SHORT_NAME_LEN + 1] = {0};
         char longName[LONG_NAME_LEN + 1] = {0};
         uint32_t lastHeard = 0;   // epoch secondi (0 = sconosciuto)
+        int8_t snrDb = INT8_MIN;  // SNR in dB (INT8_MIN = sconosciuto)
     };
 
     struct ChannelEntry {

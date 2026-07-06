@@ -1,4 +1,4 @@
-// Tnine – tastiera T9 per Meshtastic su RP2040
+// Tnine – tastiera T9 per Meshtastic su RP2040 (UI "Retro '84")
 //
 // Composizione:
 //   0-9        input T9 multi-tap (in modalità 123 inserisce la cifra)
@@ -9,8 +9,9 @@
 //   0 lungo    apre il menu
 //
 // Menu e liste:
-//   2/8        su/giù (nel dettaglio: scorri)
-//   5 o #      seleziona
+//   2/8        su/giù (nel dettaglio: scorri il testo)
+//   4/6        (nel dettaglio) cambia pulsante
+//   5 o #      seleziona / attiva il pulsante
 //   *          indietro
 
 #include <Arduino.h>
@@ -31,29 +32,39 @@ static UIDisplay ui;
 // --- Stato UI -----------------------------------------------------------------
 
 enum class Screen : uint8_t {
+    Boot,
     Compose,
     Menu,
     PickDest,
     PickChannel,
     History,
     HistoryDetail,
+    QuickMsgs,
     Info,
 };
 
-static Screen screen = Screen::Compose;
+static Screen screen = Screen::Boot;
 static String status;
 static uint32_t statusUntil = 0;
 static bool linkConnected = false;
 static uint32_t pendingPacketId = 0;
 static bool dirty = true;
+static uint32_t lastBootFrame = 0;
 
 // Destinazione e canale correnti.
 static uint32_t destNode = meshproto::BROADCAST_ADDR;
 static String destLabel = "Tutti";
 static uint32_t selChannel = MESH_CHANNEL;
 
+// Messaggi rapidi (dal prototipo UI).
+static const char* const QUICK_MSGS[] = {
+    "Ok", "Si", "No", "Arrivo tra poco", "Posizione?", "Aiuto! SOS",
+};
+static constexpr int QUICK_COUNT = sizeof(QUICK_MSGS) / sizeof(QUICK_MSGS[0]);
+
 // Storico messaggi ricevuti (il più recente in testa).
 struct HistoryEntry {
+    uint32_t fromNode = 0;
     String sender;
     String text;
     uint8_t channel = 0;
@@ -61,16 +72,20 @@ struct HistoryEntry {
 static constexpr uint8_t HISTORY_SIZE = 8;
 static HistoryEntry history[HISTORY_SIZE];
 static uint8_t historyCount = 0;
+static uint8_t unreadCount = 0;
 
 // Liste e selezioni.
 static constexpr int MAX_LIST_ITEMS = MeshtasticClient::NODE_DB_SIZE + 1;
 static String listItems[MAX_LIST_ITEMS];
+static int8_t listBars[MAX_LIST_ITEMS];
+static bool listHasBars = false;
 static int listCount = 0;
 static int listSel = 0;
-// Mappa voce lista -> indice reale (nodo o canale).
+// Mappa voce lista -> indice reale (nodo, canale, voce storico...).
 static uint32_t listRef[MAX_LIST_ITEMS];
 static int menuSel = 0;
 static int detailScroll = 0;
+static int detailBtn = 0;
 static int detailFrom = 0;  // voce di History aperta nel dettaglio
 
 static void setStatus(const char* msg, uint32_t durationMs = 3000) {
@@ -106,21 +121,27 @@ static String channelLabel(uint8_t idx) {
     return String("Canale ") + String(idx);
 }
 
-static String batteryLabel() {
-    int b = mesh.batteryLevel();
-    if (b < 0) return String();
-    if (b >= static_cast<int>(meshproto::BATTERY_POWERED)) return String("USB");
-    return String(b) + "%";
+// SNR in dB -> 0..4 tacche di segnale.
+static int8_t snrToBars(int8_t snrDb) {
+    if (snrDb == INT8_MIN) return -1;
+    if (snrDb >= 5) return 4;
+    if (snrDb >= 0) return 3;
+    if (snrDb >= -7) return 2;
+    if (snrDb >= -15) return 1;
+    return 0;
 }
 
 // --- Storico -------------------------------------------------------------------
 
-static void pushHistory(const String& sender, const String& text, uint8_t channel) {
+static void pushHistory(uint32_t fromNode, const String& sender,
+                        const String& text, uint8_t channel) {
     for (int i = HISTORY_SIZE - 1; i > 0; --i) history[i] = history[i - 1];
+    history[0].fromNode = fromNode;
     history[0].sender = sender;
     history[0].text = text;
     history[0].channel = channel;
     if (historyCount < HISTORY_SIZE) ++historyCount;
+    if (unreadCount < 99) ++unreadCount;
     dirty = true;
 }
 
@@ -128,21 +149,21 @@ static void pushHistory(const String& sender, const String& text, uint8_t channe
 
 static void onTextMessage(uint32_t fromNode, const char* senderName,
                           uint32_t channel, const String& text) {
-    pushHistory(nodeLabel(fromNode, senderName), text,
+    pushHistory(fromNode, nodeLabel(fromNode, senderName), text,
                 static_cast<uint8_t>(channel));
 }
 
 static void onPosition(uint32_t fromNode, const char* senderName,
                        int32_t latitudeI, int32_t longitudeI) {
     String text = "pos " + formatCoord(latitudeI) + "," + formatCoord(longitudeI);
-    pushHistory(nodeLabel(fromNode, senderName), text, 0);
+    pushHistory(fromNode, nodeLabel(fromNode, senderName), text, 0);
 }
 
 static void onSendResult(uint32_t packetId, uint32_t error) {
     if (packetId != pendingPacketId) return;
     pendingPacketId = 0;
     if (error == meshproto::ROUTING_ERROR_NONE) {
-        setStatus("consegnato");
+        setStatus("CONSEGNATO");
     } else {
         setStatus(meshproto::routingErrorLabel(error));
     }
@@ -150,6 +171,7 @@ static void onSendResult(uint32_t packetId, uint32_t error) {
 
 static void onLinkStateChange(MeshtasticClient::LinkState state) {
     linkConnected = (state == MeshtasticClient::LinkState::Connected);
+    if (linkConnected && screen == Screen::Boot) screen = Screen::Compose;
     dirty = true;
 }
 
@@ -167,13 +189,16 @@ static void openMenu() {
 
 static void buildDestList() {
     listCount = 0;
+    listHasBars = true;
     listItems[listCount] = "Tutti (broadcast)";
+    listBars[listCount] = -1;
     listRef[listCount++] = meshproto::BROADCAST_ADDR;
     for (uint8_t i = 0; i < mesh.nodeCount() && listCount < MAX_LIST_ITEMS; ++i) {
         const MeshtasticClient::NodeEntry& n = mesh.node(i);
         String label = nodeLabel(n.num, n.shortName);
         if (n.longName[0] != '\0') label += String(" ") + n.longName;
         listItems[listCount] = label;
+        listBars[listCount] = snrToBars(n.snrDb);
         listRef[listCount++] = n.num;
     }
     listSel = 0;
@@ -184,6 +209,7 @@ static void buildDestList() {
 
 static void buildChannelList() {
     listCount = 0;
+    listHasBars = false;
     for (uint8_t i = 0; i < meshproto::MAX_CHANNELS; ++i) {
         if (!mesh.channel(i).used) continue;
         listItems[listCount] = channelLabel(i);
@@ -202,6 +228,7 @@ static void buildChannelList() {
 
 static void buildHistoryList() {
     listCount = 0;
+    listHasBars = false;
     for (uint8_t i = 0; i < historyCount && listCount < MAX_LIST_ITEMS; ++i) {
         listItems[listCount] = history[i].sender + ": " + history[i].text;
         listRef[listCount++] = i;
@@ -209,23 +236,20 @@ static void buildHistoryList() {
     listSel = 0;
 }
 
-static String infoText() {
+static void buildQuickList() {
+    listCount = 0;
+    listHasBars = false;
+    for (int i = 0; i < QUICK_COUNT; ++i) {
+        listItems[listCount] = QUICK_MSGS[i];
+        listRef[listCount++] = i;
+    }
+    listSel = 0;
+}
+
+static String myNodeId() {
     char hex[12];
     snprintf(hex, sizeof(hex), "!%08lx", static_cast<unsigned long>(mesh.myNodeNum()));
-    String s = "Nodo: ";
-    s += hex;
-    s += "  Batteria: ";
-    String batt = batteryLabel();
-    s += batt.length() ? batt : String("?");
-    s += "  Collegamento: ";
-    s += linkConnected ? "ok" : "in attesa";
-    s += "  Nodi noti: ";
-    s += String(mesh.nodeCount());
-    s += "  Dest: ";
-    s += destLabel;
-    s += "  Canale: ";
-    s += channelLabel(selChannel);
-    return s;
+    return String(hex);
 }
 
 // --- Invio -----------------------------------------------------------------------
@@ -233,16 +257,16 @@ static String infoText() {
 static void sendMessage() {
     t9.commitPending();
     if (t9.text().length() == 0) {
-        setStatus("vuoto");
+        setStatus("VUOTO");
         return;
     }
     uint32_t id = mesh.sendText(t9.text(), destNode, selChannel);
     if (id != 0) {
         pendingPacketId = id;
         t9.clear();
-        setStatus("invio...", 30000);  // sostituito dall'esito dell'ACK
+        setStatus("INVIO...", 30000);  // sostituito dall'esito dell'ACK
     } else {
-        setStatus("errore");
+        setStatus("ERRORE");
     }
 }
 
@@ -264,7 +288,7 @@ static void handleComposeKey(const KeyEvent& ev, uint32_t now) {
             dirty |= t9.backspace();
         } else if (ev.type == KeyEvent::LongHold) {
             t9.clear();
-            setStatus("cancellato");
+            setStatus("CANCELLATO");
         }
         return;
     }
@@ -294,10 +318,12 @@ static int listNav(const KeyEvent& ev) {
     return -1;
 }
 
-static void handleMenuKey(const KeyEvent& ev) {
-    static const char* const MENU[] = {"Destinatario", "Canale", "Messaggi", "Info"};
-    static constexpr int MENU_COUNT = 4;
+static const char* const MENU_ITEMS[] = {
+    "Destinatario", "Canale", "Messaggi", "Msg rapidi", "Info",
+};
+static constexpr int MENU_COUNT = sizeof(MENU_ITEMS) / sizeof(MENU_ITEMS[0]);
 
+static void handleMenuKey(const KeyEvent& ev) {
     // Il menu riusa la navigazione delle liste su menuSel.
     listCount = MENU_COUNT;
     int prevSel = listSel;
@@ -313,26 +339,24 @@ static void handleMenuKey(const KeyEvent& ev) {
         switch (menuSel) {
             case 0: buildDestList();    screen = Screen::PickDest;    break;
             case 1: buildChannelList(); screen = Screen::PickChannel; break;
-            case 2: buildHistoryList(); screen = Screen::History;     break;
-            case 3: detailScroll = 0;   screen = Screen::Info;        break;
+            case 2:
+                buildHistoryList();
+                unreadCount = 0;
+                screen = Screen::History;
+                break;
+            case 3: buildQuickList();   screen = Screen::QuickMsgs;   break;
+            case 4: screen = Screen::Info;                            break;
         }
         dirty = true;
     }
-
-    if (dirty && screen == Screen::Menu) {
-        for (int i = 0; i < MENU_COUNT; ++i) listItems[i] = MENU[i];
-        listCount = MENU_COUNT;
-    }
 }
 
-static void handleListKey(const KeyEvent& ev, uint32_t now) {
-    (void)now;
+static void handleListKey(const KeyEvent& ev) {
     int action = listNav(ev);
     if (action < 0) return;
 
     if (action == 0) {  // indietro
-        screen = (screen == Screen::HistoryDetail) ? Screen::History : Screen::Menu;
-        if (screen == Screen::History) buildHistoryList();
+        screen = Screen::Menu;
         dirty = true;
         return;
     }
@@ -344,20 +368,26 @@ static void handleListKey(const KeyEvent& ev, uint32_t now) {
             destLabel = (destNode == meshproto::BROADCAST_ADDR)
                             ? String("Tutti")
                             : nodeLabel(destNode, mesh.shortNameOf(destNode));
-            setStatus("dest ok");
+            setStatus("DEST OK");
             screen = Screen::Compose;
             break;
         case Screen::PickChannel:
             selChannel = listRef[listSel];
-            setStatus("canale ok");
+            setStatus("CANALE OK");
             screen = Screen::Compose;
             break;
         case Screen::History:
             if (listCount > 0) {
                 detailFrom = listRef[listSel];
                 detailScroll = 0;
+                detailBtn = 0;
                 screen = Screen::HistoryDetail;
             }
+            break;
+        case Screen::QuickMsgs:
+            t9.setText(QUICK_MSGS[listRef[listSel]]);
+            setStatus("PRONTO: # INVIA");
+            screen = Screen::Compose;
             break;
         default:
             break;
@@ -365,21 +395,59 @@ static void handleListKey(const KeyEvent& ev, uint32_t now) {
     dirty = true;
 }
 
-static void handleDetailKey(const KeyEvent& ev, const String& text) {
+static void replyToDetail() {
+    const HistoryEntry& h = history[detailFrom];
+    if (h.fromNode != 0) {
+        destNode = h.fromNode;
+        destLabel = h.sender;
+        setStatus("DEST OK");
+    }
+    screen = Screen::Compose;
+    dirty = true;
+}
+
+static void handleHistoryDetailKey(const KeyEvent& ev, const String& text) {
     if (ev.type == KeyEvent::Down) {
         int total = UIDisplay::detailLines(text);
         if (ev.key == '2' && detailScroll > 0) { --detailScroll; dirty = true; }
         if (ev.key == '8' && detailScroll < total - 1) { ++detailScroll; dirty = true; }
+        if (ev.key == '4' && detailBtn > 0) { --detailBtn; dirty = true; }
+        if (ev.key == '6' && detailBtn < 1) { ++detailBtn; dirty = true; }
     }
-    if (ev.type == KeyEvent::Up && !ev.wasLong && ev.key == '*') {
-        screen = (screen == Screen::Info) ? Screen::Menu : Screen::History;
-        if (screen == Screen::History) buildHistoryList();
+    if (ev.type == KeyEvent::Up && !ev.wasLong) {
+        if (ev.key == '*') {
+            screen = Screen::History;
+            buildHistoryList();
+            dirty = true;
+        } else if (ev.key == '#' || ev.key == '5') {
+            if (detailBtn == 0) {
+                replyToDetail();
+            } else {
+                screen = Screen::History;
+                buildHistoryList();
+                dirty = true;
+            }
+        }
+    }
+}
+
+static void handleInfoKey(const KeyEvent& ev) {
+    if (ev.type == KeyEvent::Up && !ev.wasLong &&
+        (ev.key == '*' || ev.key == '#' || ev.key == '5')) {
+        screen = Screen::Menu;
         dirty = true;
     }
 }
 
 static void handleKeyEvent(const KeyEvent& ev, uint32_t now) {
     switch (screen) {
+        case Screen::Boot:
+            // Un tasto qualsiasi salta alla composizione.
+            if (ev.type == KeyEvent::Down) {
+                screen = Screen::Compose;
+                dirty = true;
+            }
+            break;
         case Screen::Compose:
             handleComposeKey(ev, now);
             break;
@@ -389,14 +457,15 @@ static void handleKeyEvent(const KeyEvent& ev, uint32_t now) {
         case Screen::PickDest:
         case Screen::PickChannel:
         case Screen::History:
-            handleListKey(ev, now);
+        case Screen::QuickMsgs:
+            handleListKey(ev);
             break;
         case Screen::HistoryDetail:
-            handleDetailKey(ev, history[detailFrom].sender + ": " +
-                                    history[detailFrom].text);
+            handleHistoryDetailKey(ev, history[detailFrom].sender + ": " +
+                                           history[detailFrom].text);
             break;
         case Screen::Info:
-            handleDetailKey(ev, infoText());
+            handleInfoKey(ev);
             break;
     }
 }
@@ -407,53 +476,58 @@ static void render() {
     preview.render(t9);
 
     switch (screen) {
+        case Screen::Boot: {
+            // Gauge animato finché il nodo non risponde all'handshake.
+            int pct = static_cast<int>((millis() / 60) % 100);
+            ui.renderBoot(pct);
+            break;
+        }
         case Screen::Compose: {
             String right;
             if (status.length() > 0) {
                 right = status;
             } else if (!linkConnected) {
-                right = "mesh...";
+                right = "MESH...";
             } else {
                 right = ">" + destLabel;
-                String batt = batteryLabel();
-                if (batt.length() > 0) right += " " + batt;
             }
-            String rx;
-            if (historyCount > 0) {
-                rx = history[0].sender + ": " + history[0].text;
-            }
-            ui.renderCompose(t9, rx, right);
+            ui.renderCompose(t9, right, mesh.batteryLevel(), unreadCount);
             break;
         }
         case Screen::Menu: {
-            static const char* const MENU[] = {"Destinatario", "Canale",
-                                               "Messaggi", "Info"};
-            for (int i = 0; i < 4; ++i) listItems[i] = MENU[i];
-            ui.renderList("Menu", listItems, 4, menuSel);
+            for (int i = 0; i < MENU_COUNT; ++i) listItems[i] = MENU_ITEMS[i];
+            ui.renderList("MENU", myNodeId(), listItems, MENU_COUNT, menuSel);
             break;
         }
         case Screen::PickDest:
-            ui.renderList("Destinatario", listItems, listCount, listSel);
+            ui.renderList("DESTINATARIO", String(listCount - 1) + " NODI",
+                          listItems, listCount, listSel,
+                          listHasBars ? listBars : nullptr);
             break;
         case Screen::PickChannel:
-            ui.renderList("Canale", listItems, listCount, listSel);
+            ui.renderList("CANALE", "", listItems, listCount, listSel);
             break;
         case Screen::History:
             if (listCount == 0) {
                 listItems[0] = "(nessun messaggio)";
-                ui.renderList("Messaggi", listItems, 1, 0);
+                ui.renderList("MESSAGGI", "0", listItems, 1, 0);
             } else {
-                ui.renderList("Messaggi", listItems, listCount, listSel);
+                ui.renderList("MESSAGGI", String(listCount), listItems,
+                              listCount, listSel);
             }
             break;
         case Screen::HistoryDetail:
-            ui.renderDetail("Messaggio",
+            ui.renderDetail("MESSAGGIO", history[detailFrom].sender,
                             history[detailFrom].sender + ": " +
                                 history[detailFrom].text,
-                            detailScroll);
+                            detailScroll, "RISPONDI", "CHIUDI", detailBtn);
+            break;
+        case Screen::QuickMsgs:
+            ui.renderList("MSG RAPIDI", "", listItems, listCount, listSel);
             break;
         case Screen::Info:
-            ui.renderDetail("Info", infoText(), detailScroll);
+            ui.renderInfo(myNodeId(), mesh.batteryLevel(), linkConnected,
+                          mesh.nodeCount(), destLabel, channelLabel(selChannel));
             break;
     }
 }
@@ -489,6 +563,12 @@ void loop() {
 
     if (status.length() > 0 && static_cast<int32_t>(now - statusUntil) >= 0) {
         status = "";
+        dirty = true;
+    }
+
+    // Il boot si ridisegna periodicamente per animare il gauge.
+    if (screen == Screen::Boot && now - lastBootFrame >= 100) {
+        lastBootFrame = now;
         dirty = true;
     }
 
