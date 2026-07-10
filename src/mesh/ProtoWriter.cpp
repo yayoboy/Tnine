@@ -27,6 +27,14 @@ bool ProtoWriter::varintField(uint32_t field, uint64_t value) {
     return putKey(field, 0) && putVarint(value);
 }
 
+bool ProtoWriter::fixed32Field(uint32_t field, uint32_t value) {
+    if (!putKey(field, 5)) return false;
+    for (int i = 0; i < 4; ++i) {
+        if (!putByte(static_cast<uint8_t>(value >> (i * 8)))) return false;
+    }
+    return true;
+}
+
 bool ProtoWriter::bytesField(uint32_t field, const uint8_t* data, size_t len) {
     if (!putKey(field, 2) || !putVarint(len)) return false;
     for (size_t i = 0; i < len; ++i) {

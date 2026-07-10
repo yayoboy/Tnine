@@ -71,6 +71,9 @@ void MeshtasticClient::poll(uint32_t now) {
         uint8_t b = static_cast<uint8_t>(Serial2.read());
         size_t len = _parser.feed(b, _rxPayload);
         if (len > 0) {
+            // Il dump di configurazione è in corso: rimanda l'eventuale
+            // ritrasmissione del want_config_id per non riavviarlo da capo.
+            if (_state == LinkState::Connecting) _lastConfigRequest = now;
             meshproto::parseFromRadio(_rxPayload, len, *this);
         }
     }

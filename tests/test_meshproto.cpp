@@ -75,16 +75,18 @@ static void testBuildTextMessage() {
     assert(toRadio.next() && toRadio.field() == 1 && toRadio.wireType() == 2);
 
     // MeshPacket { to, channel, decoded, id, want_ack }
+    // to e id DEVONO essere fixed32 (mesh.proto), non varint: il decoder
+    // nanopb del nodo scarta i campi con wire type sbagliato.
     uint32_t to = 0, channel = 0, id = 0, wantAck = 0;
     const uint8_t* decoded = nullptr;
     size_t decodedLen = 0;
     ProtoReader pkt(toRadio.data(), toRadio.dataLen());
     while (pkt.next()) {
         switch (pkt.field()) {
-            case 2:  to = pkt.varint(); break;
+            case 2:  assert(pkt.wireType() == 5); to = pkt.fixed32(); break;
             case 3:  channel = pkt.varint(); break;
             case 4:  decoded = pkt.data(); decodedLen = pkt.dataLen(); break;
-            case 6:  id = pkt.varint(); break;
+            case 6:  assert(pkt.wireType() == 5); id = pkt.fixed32(); break;
             case 10: wantAck = pkt.varint(); break;
         }
     }
@@ -267,7 +269,7 @@ static void testParseFromRadio() {
         assert(h.chName == "Escursione");
     }
 
-    // FromRadio { 2: MeshPacket { 1: from, 4: Data { 1: TEXT, 2: "hola" } } }
+    // FromRadio { 2: MeshPacket { 1: from(fixed32), 4: Data { 1: TEXT, 2: "hola" } } }
     {
         uint8_t data[32];
         ProtoWriter d(data, sizeof(data));
@@ -275,12 +277,12 @@ static void testParseFromRadio() {
         d.bytesField(2, reinterpret_cast<const uint8_t*>("hola"), 4);
         uint8_t pkt[64];
         ProtoWriter p(pkt, sizeof(pkt));
-        p.varintField(1, 0x55u);
+        p.fixed32Field(1, 0xAABBCCDDu);  // from: fixed32 come sul nodo reale
         p.bytesField(4, data, d.size());
         ProtoWriter fr(buf, sizeof(buf));
         fr.bytesField(2, pkt, p.size());
         parseFromRadio(buf, fr.size(), h);
-        assert(h.textFrom == 0x55u);
+        assert(h.textFrom == 0xAABBCCDDu);
         assert(h.text == "hola");
     }
 
@@ -296,7 +298,7 @@ static void testParseFromRadio() {
         d.bytesField(2, posBuf, pos);
         uint8_t pkt[64];
         ProtoWriter p(pkt, sizeof(pkt));
-        p.varintField(1, 0x66u);
+        p.fixed32Field(1, 0x66u);
         p.bytesField(4, data, d.size());
         ProtoWriter fr(buf, sizeof(buf));
         fr.bytesField(2, pkt, p.size());
@@ -320,7 +322,7 @@ static void testParseFromRadio() {
         d.bytesField(2, telem, t.size());
         uint8_t pkt[64];
         ProtoWriter p(pkt, sizeof(pkt));
-        p.varintField(1, 0x77u);
+        p.fixed32Field(1, 0x77u);
         p.bytesField(4, data, d.size());
         ProtoWriter fr(buf, sizeof(buf));
         fr.bytesField(2, pkt, p.size());
@@ -330,13 +332,13 @@ static void testParseFromRadio() {
     }
 
     // ACK: MeshPacket { 4: Data { 1: ROUTING, 2: Routing{}, 6: request_id } }
-    // Routing vuoto = error_reason NONE = consegnato.
+    // Routing vuoto = error_reason NONE = consegnato. request_id è fixed32.
     {
         uint8_t data[32];
         ProtoWriter d(data, sizeof(data));
         d.varintField(1, PORT_ROUTING);
         d.bytesField(2, nullptr, 0);
-        d.varintField(6, 0xABCDu);
+        d.fixed32Field(6, 0xABCDu);
         uint8_t pkt[64];
         ProtoWriter p(pkt, sizeof(pkt));
         p.bytesField(4, data, d.size());
@@ -356,7 +358,7 @@ static void testParseFromRadio() {
         ProtoWriter d(data, sizeof(data));
         d.varintField(1, PORT_ROUTING);
         d.bytesField(2, routing, rt.size());
-        d.varintField(6, 0x99u);
+        d.fixed32Field(6, 0x99u);
         uint8_t pkt[64];
         ProtoWriter p(pkt, sizeof(pkt));
         p.bytesField(4, data, d.size());
@@ -366,6 +368,10 @@ static void testParseFromRadio() {
         assert(h.ackRequestId == 0x99u);
         assert(h.ackError == 3);
         assert(strcmp(routingErrorLabel(3), "timeout") == 0);
+        // Mappatura Routing.Error verificata contro mesh.proto ufficiale
+        assert(strcmp(routingErrorLabel(5), "max ritx") == 0);   // MAX_RETRANSMIT
+        assert(strcmp(routingErrorLabel(6), "no canale") == 0);  // NO_CHANNEL
+        assert(strcmp(routingErrorLabel(9), "duty limit") == 0); // DUTY_CYCLE_LIMIT
     }
 
     // FromRadio { 7: config_complete_id } e { 8: rebooted }

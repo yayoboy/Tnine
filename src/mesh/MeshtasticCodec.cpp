@@ -87,12 +87,13 @@ size_t buildTextMessageFrame(uint8_t* out, size_t cap,
     if (!data.ok()) return 0;
 
     // MeshPacket { to, channel, decoded: Data, id, want_ack: true }
+    // Attenzione: from/to/id sono fixed32 in mesh.proto, non varint.
     uint8_t pktBuf[MAX_PAYLOAD];
     ProtoWriter pkt(pktBuf, sizeof(pktBuf));
-    pkt.varintField(fields::PACKET_TO, to);
+    pkt.fixed32Field(fields::PACKET_TO, to);
     if (channel != 0) pkt.varintField(fields::PACKET_CHANNEL, channel);
     pkt.bytesField(fields::PACKET_DECODED, dataBuf, data.size());
-    pkt.varintField(fields::PACKET_ID, packetId);
+    pkt.fixed32Field(fields::PACKET_ID, packetId);
     pkt.varintField(fields::PACKET_WANT_ACK, 1);
     if (!pkt.ok()) return 0;
 
@@ -180,7 +181,10 @@ static void parseData(const uint8_t* buf, size_t len, uint32_t fromNode,
                 payloadLen = r.dataLen();
                 break;
             case fields::DATA_REQUEST_ID:
-                requestId = static_cast<uint32_t>(r.varint());
+                // fixed32 in mesh.proto (varint accettato per robustezza).
+                requestId = (r.wireType() == 5)
+                                ? r.fixed32()
+                                : static_cast<uint32_t>(r.varint());
                 break;
         }
     }
@@ -227,7 +231,9 @@ static void parseMeshPacket(const uint8_t* buf, size_t len, FromRadioHandler& ha
     while (r.next()) {
         switch (r.field()) {
             case fields::PACKET_FROM:
-                from = static_cast<uint32_t>(r.varint());
+                // fixed32 in mesh.proto (varint accettato per robustezza).
+                from = (r.wireType() == 5) ? r.fixed32()
+                                           : static_cast<uint32_t>(r.varint());
                 break;
             case fields::PACKET_CHANNEL:
                 channel = static_cast<uint32_t>(r.varint());
@@ -366,15 +372,19 @@ void parseFromRadio(const uint8_t* payload, size_t len, FromRadioHandler& handle
     }
 }
 
+// Etichette per Routing.Error (mesh.proto).
 const char* routingErrorLabel(uint32_t error) {
     switch (error) {
-        case 0:  return "ok";
-        case 1:  return "no route";
-        case 2:  return "nak";
-        case 3:  return "timeout";
-        case 5:  return "no canale";
-        case 7:  return "no risp";
-        case 9:  return "max ritx";
+        case 0:  return "ok";          // NONE
+        case 1:  return "no route";    // NO_ROUTE
+        case 2:  return "nak";         // GOT_NAK
+        case 3:  return "timeout";     // TIMEOUT
+        case 4:  return "no iface";    // NO_INTERFACE
+        case 5:  return "max ritx";    // MAX_RETRANSMIT
+        case 6:  return "no canale";   // NO_CHANNEL
+        case 7:  return "tr.grande";   // TOO_LARGE
+        case 8:  return "no risp";     // NO_RESPONSE
+        case 9:  return "duty limit";  // DUTY_CYCLE_LIMIT
         default: return "err";
     }
 }

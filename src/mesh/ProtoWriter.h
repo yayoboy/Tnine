@@ -11,6 +11,7 @@ public:
     ProtoWriter(uint8_t* buf, size_t cap) : _buf(buf), _cap(cap) {}
 
     bool varintField(uint32_t field, uint64_t value);
+    bool fixed32Field(uint32_t field, uint32_t value);
     bool bytesField(uint32_t field, const uint8_t* data, size_t len);
 
     size_t size() const { return _pos; }
